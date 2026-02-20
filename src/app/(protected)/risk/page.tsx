@@ -78,7 +78,7 @@ export default async function RiskPage({
   return (
     <div className="stack-16">
       <header className="stack-8">
-        <p className="eyebrow">PGWP Risk</p>
+        <p className="eyebrow">AI Risk</p>
         <h1>Risk overview</h1>
       </header>
 
