@@ -33,6 +33,7 @@ const groups: NavGroup[] = [
     items: [
       { href: "/study-permit", label: "Study checklist" },
       { href: "/pgwp", label: "PGWP checklist" },
+      { href: "/tasks/new?category=pgwp", label: "New PGWP task" },
       { href: "/risk", label: "PGWP Risk" },
       { href: "/crs", label: "CRS Calculator" },
     ],
