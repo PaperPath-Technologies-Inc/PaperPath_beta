@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -18,7 +18,7 @@ type TaskStats = {
 };
 
 type CategoryPill = {
-  active?: boolean;
+  active: boolean;
   count: number;
   label: string;
 };
@@ -36,14 +36,7 @@ const ZERO_TASK_STATS: TaskStats = {
   total: 0,
 };
 
-const FALLBACK_CATEGORIES: CategoryPill[] = [
-  { label: "General", count: 0, active: true },
-  { label: "Docs", count: 0 },
-  { label: "School", count: 0 },
-  { label: "Immigration", count: 0 },
-];
-
-const CATEGORY_PRIORITY = ["General", "Docs", "School", "Immigration"];
+const FIXED_CATEGORY_ORDER = ["General", "Docs", "School", "Immigration"];
 
 const quickCards = [
   { title: "Docs Vault", subtitle: "3 files", icon: "folder-open", route: "Vault" },
@@ -56,8 +49,8 @@ export default function HomeScreen() {
   const { tokens, isDark } = useTheme();
   const { session } = useAuth();
   const [displayName, setDisplayName] = useState<string | null>(null);
-  const [taskStats, setTaskStats] = useState<TaskStats>(ZERO_TASK_STATS);
-  const [taskCategories, setTaskCategories] = useState<CategoryPill[]>(FALLBACK_CATEGORIES);
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string>("All");
 
   const userId = session?.user.id;
   const emailPrefix = session?.user.email?.split("@")[0]?.trim() || null;
@@ -114,11 +107,11 @@ export default function HomeScreen() {
   useEffect(() => {
     let cancelled = false;
 
-    const loadTaskStats = async () => {
+    const loadTasks = async () => {
       if (!userId || !isSupabaseConfigured) {
         if (!cancelled) {
-          setTaskStats(ZERO_TASK_STATS);
-          setTaskCategories(FALLBACK_CATEGORIES);
+          setTasks([]);
+          setSelectedCategory("All");
         }
         return;
       }
@@ -133,70 +126,98 @@ export default function HomeScreen() {
           throw error;
         }
 
-        const rows = (data ?? []) as TaskRow[];
-        const today = new Date().toISOString().slice(0, 10);
-        const counts = new Map<string, number>();
-        let done = 0;
-        let overdue = 0;
-
-        for (const row of rows) {
-          const status = row.status?.trim().toLowerCase() ?? "";
-          const isDone = status === "done";
-
-          if (isDone) {
-            done += 1;
-          }
-
-          const dueDate = row.due_date?.slice(0, 10);
-          if (dueDate && dueDate < today && !isDone) {
-            overdue += 1;
-          }
-
-          const rawCategory = row.category?.trim();
-          const category = rawCategory && rawCategory.length > 0 ? rawCategory : "Uncategorized";
-          counts.set(category, (counts.get(category) ?? 0) + 1);
-        }
-
-        const total = rows.length;
-        const remaining = Math.max(total - done, 0);
-
-        const sortedCategoryLabels = [...counts.keys()].sort((a, b) => {
-          const aPriority = CATEGORY_PRIORITY.indexOf(a);
-          const bPriority = CATEGORY_PRIORITY.indexOf(b);
-          if (aPriority !== -1 || bPriority !== -1) {
-            return (aPriority === -1 ? Number.MAX_SAFE_INTEGER : aPriority)
-              - (bPriority === -1 ? Number.MAX_SAFE_INTEGER : bPriority);
-          }
-          return a.localeCompare(b);
-        });
-
-        const nextCategories = sortedCategoryLabels.length
-          ? sortedCategoryLabels.map((label, index) => ({
-              active: index === 0,
-              count: counts.get(label) ?? 0,
-              label,
-            }))
-          : FALLBACK_CATEGORIES;
-
         if (!cancelled) {
-          setTaskStats({ done, overdue, remaining, total });
-          setTaskCategories(nextCategories);
+          setTasks((data ?? []) as TaskRow[]);
         }
       } catch (error) {
         console.warn("Home stats fetch failed. Falling back to zeros. Missing schema info may be the cause.", error);
         if (!cancelled) {
-          setTaskStats(ZERO_TASK_STATS);
-          setTaskCategories(FALLBACK_CATEGORIES);
+          setTasks([]);
+          setSelectedCategory("All");
         }
       }
     };
 
-    loadTaskStats();
+    loadTasks();
 
     return () => {
       cancelled = true;
     };
   }, [userId]);
+
+  const normalizeCategory = (value?: string | null) => {
+    const trimmed = value?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : "Uncategorized";
+  };
+
+  const taskCategories = useMemo<CategoryPill[]>(() => {
+    const counts = new Map<string, number>();
+
+    for (const task of tasks) {
+      const category = normalizeCategory(task.category);
+      counts.set(category, (counts.get(category) ?? 0) + 1);
+    }
+
+    const fixedCategories = FIXED_CATEGORY_ORDER.filter((label) => counts.has(label));
+    const otherCategories = [...counts.keys()]
+      .filter((label) => !FIXED_CATEGORY_ORDER.includes(label))
+      .sort((a, b) => a.localeCompare(b));
+    const ordered = ["All", ...fixedCategories, ...otherCategories];
+
+    return ordered.map((label) => ({
+      active: selectedCategory === label,
+      count: label === "All" ? tasks.length : counts.get(label) ?? 0,
+      label,
+    }));
+  }, [selectedCategory, tasks]);
+
+  useEffect(() => {
+    if (selectedCategory === "All") {
+      return;
+    }
+
+    const categoryExists = tasks.some((task) => normalizeCategory(task.category) === selectedCategory);
+    if (!categoryExists) {
+      setSelectedCategory("All");
+    }
+  }, [selectedCategory, tasks]);
+
+  const taskStats = useMemo<TaskStats>(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const filteredTasks =
+      selectedCategory === "All"
+        ? tasks
+        : tasks.filter((task) => normalizeCategory(task.category) === selectedCategory);
+
+    if (filteredTasks.length === 0) {
+      return ZERO_TASK_STATS;
+    }
+
+    let done = 0;
+    let overdue = 0;
+
+    for (const task of filteredTasks) {
+      const status = task.status?.trim().toLowerCase() ?? "";
+      const isDone = status === "done";
+
+      if (isDone) {
+        done += 1;
+      }
+
+      const dueDate = task.due_date?.slice(0, 10);
+      if (dueDate && dueDate < today && !isDone) {
+        overdue += 1;
+      }
+    }
+
+    const total = filteredTasks.length;
+    return {
+      done,
+      overdue,
+      remaining: total - done,
+      total,
+    };
+  }, [selectedCategory, tasks]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: tokens.bg }]} edges={["top"]}>
@@ -243,7 +264,15 @@ export default function HomeScreen() {
 
         <View style={styles.pillsRow}>
           {taskCategories.map((item) => (
-            <Pill key={item.label} label={item.label} count={item.count} active={item.active} />
+            <Pill
+              key={item.label}
+              label={item.label}
+              count={item.count}
+              active={item.active}
+              onPress={() => {
+                setSelectedCategory(item.label);
+              }}
+            />
           ))}
         </View>
 
