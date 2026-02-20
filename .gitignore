@@ -1,13 +1,9 @@
-node_modules
-.next
-.vercel
-.env*
-*.log
+# global
 .DS_Store
-dist
-out
-coverage
 
-# ignore local artifacts
-paperpath_clean.zip
-*.tsbuildinfo
+# env
+.env
+.env.*
+
+# node
+node_modules
