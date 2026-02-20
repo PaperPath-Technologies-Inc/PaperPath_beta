@@ -17,31 +17,21 @@ type DrawerGroup = {
 
 const groups: DrawerGroup[] = [
   {
-    title: "Main",
+    title: "Core",
     items: [
       { href: "/home", label: "Home" },
-      { href: "/weekly-review", label: "Weekly Review" },
-      { href: "/notifications", label: "Notification" },
       { href: "/tasks", label: "Tasks" },
-    ],
-  },
-  {
-    title: "Planning",
-    items: [
-      { href: "/study-permit", label: "Study Permit" },
-      { href: "/pgwp", label: "PGWP" },
-      { href: "/deadlines", label: "Timeline / Deadlines" },
-      { href: "/tasks/new?category=pgwp", label: "New PGWP Task" },
-      { href: "/reminders/create", label: "Reminders" },
-      { href: "/risk", label: "Risk" },
-      { href: "/crs", label: "CRS Calculator" },
-    ],
-  },
-  {
-    title: "Account",
-    items: [
+      { href: "/reminders", label: "Reminders" },
       { href: "/vault", label: "Vault (Documents)" },
       { href: "/profile", label: "Settings / Profile" },
+    ],
+  },
+  {
+    title: "Extras",
+    items: [
+      { href: "/risk", label: "AI Risk" },
+      { href: "/pricing", label: "Upgrade" },
+      { href: "/contact", label: "Support" },
     ],
   },
 ];
