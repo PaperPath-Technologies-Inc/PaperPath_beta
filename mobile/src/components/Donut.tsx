@@ -9,9 +9,23 @@ type DonutProps = {
   overdue?: number;
   size?: number;
   strokeWidth?: number;
+  progressColor?: string;
+  trackColor?: string;
+  overdueColor?: string;
+  textColor?: string;
 };
 
-export function Donut({ done, total, overdue = 0, size = 128, strokeWidth = 14 }: DonutProps) {
+export function Donut({
+  done,
+  total,
+  overdue = 0,
+  size = 128,
+  strokeWidth = 14,
+  progressColor,
+  trackColor,
+  overdueColor,
+  textColor,
+}: DonutProps) {
   const { tokens } = useTheme();
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -28,7 +42,7 @@ export function Donut({ done, total, overdue = 0, size = 128, strokeWidth = 14 }
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke={tokens.border}
+          stroke={trackColor ?? tokens.border}
           strokeWidth={strokeWidth}
           fill="none"
         />
@@ -36,7 +50,7 @@ export function Donut({ done, total, overdue = 0, size = 128, strokeWidth = 14 }
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          stroke={tokens.primaryBlue}
+          stroke={progressColor ?? tokens.primaryBlue}
           strokeWidth={strokeWidth}
           fill="none"
           strokeDasharray={`${progressLength} ${circumference}`}
@@ -48,7 +62,7 @@ export function Donut({ done, total, overdue = 0, size = 128, strokeWidth = 14 }
             cx={size / 2}
             cy={size / 2}
             r={radius}
-            stroke={tokens.warning}
+            stroke={overdueColor ?? tokens.warning}
             strokeWidth={strokeWidth}
             fill="none"
             strokeDasharray={`${overdueLength} ${circumference}`}
@@ -59,7 +73,7 @@ export function Donut({ done, total, overdue = 0, size = 128, strokeWidth = 14 }
         ) : null}
       </Svg>
       <View style={styles.center}>
-        <Text style={[styles.percent, { color: tokens.text }]}>{completeLabel}</Text>
+        <Text style={[styles.percent, { color: textColor ?? tokens.text }]}>{completeLabel}</Text>
       </View>
     </View>
   );

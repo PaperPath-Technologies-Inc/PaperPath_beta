@@ -1,14 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { router } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import Svg, { Circle } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Card } from "@/src/components/Card";
-import { Donut } from "@/src/components/Donut";
-import { Pill } from "@/src/components/Pill";
-import { supabase, isSupabaseConfigured } from "@/src/lib/supabase";
+import { isSupabaseConfigured, supabase } from "@/src/lib/supabase";
 import { useAuth } from "@/src/lib/useAuth";
 import { useTheme } from "@/src/theme/useTheme";
+
+type CategoryName = "General" | "Docs" | "School" | "Immigration";
+
+type TaskRow = {
+  category?: string | null;
+  due_date?: string | null;
+  status?: string | null;
+};
 
 type TaskStats = {
   done: number;
@@ -17,40 +26,70 @@ type TaskStats = {
   total: number;
 };
 
-type CategoryPill = {
-  active: boolean;
-  count: number;
-  label: string;
-};
+type CategoryStats = Record<CategoryName, { done: number; total: number }>;
 
-type TaskRow = {
-  category?: string | null;
-  due_date?: string | null;
-  status?: string | null;
-};
+const GROUPS: { icon: keyof typeof Ionicons.glyphMap; label: CategoryName }[] = [
+  { icon: "grid-outline", label: "General" },
+  { icon: "document-text-outline", label: "Docs" },
+  { icon: "school-outline", label: "School" },
+  { icon: "airplane-outline", label: "Immigration" },
+];
 
-const ZERO_TASK_STATS: TaskStats = {
-  done: 0,
-  overdue: 0,
-  remaining: 0,
-  total: 0,
-};
+function CategoryRing({
+  percent,
+  size,
+  strokeWidth,
+  color,
+  trackColor,
+  textColor,
+}: {
+  percent: number;
+  size: number;
+  strokeWidth: number;
+  color: string;
+  trackColor: string;
+  textColor: string;
+}) {
+  const clamped = Math.min(Math.max(percent, 0), 100);
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const progressLength = circumference * (clamped / 100);
 
-const FIXED_CATEGORY_ORDER = ["General", "Docs", "School", "Immigration"];
-
-const quickCards = [
-  { title: "Docs Vault", subtitle: "3 files", icon: "folder-open", route: "Vault" },
-  { title: "Reminders", subtitle: "2 upcoming", icon: "notifications", route: "More" },
-  { title: "AI Risk", subtitle: "Not scored yet", icon: "analytics", route: "More" },
-  { title: "CRS", subtitle: "Not saved", icon: "bar-chart", route: "More" },
-] as const;
+  return (
+    <View style={{ width: size, height: size }}>
+      <Svg width={size} height={size}>
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={trackColor}
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={color}
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={`${progressLength} ${circumference}`}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </Svg>
+      <View style={styles.ringLabelWrap}>
+        <Text style={[styles.ringLabel, { color: textColor }]}>{Math.round(clamped)}%</Text>
+      </View>
+    </View>
+  );
+}
 
 export default function HomeScreen() {
-  const { tokens, isDark } = useTheme();
+  const { tokens } = useTheme();
   const { session } = useAuth();
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>("All");
 
   const userId = session?.user.id;
   const emailPrefix = session?.user.email?.split("@")[0]?.trim() || null;
@@ -111,7 +150,6 @@ export default function HomeScreen() {
       if (!userId || !isSupabaseConfigured) {
         if (!cancelled) {
           setTasks([]);
-          setSelectedCategory("All");
         }
         return;
       }
@@ -130,10 +168,9 @@ export default function HomeScreen() {
           setTasks((data ?? []) as TaskRow[]);
         }
       } catch (error) {
-        console.warn("Home stats fetch failed. Falling back to zeros. Missing schema info may be the cause.", error);
+        console.warn("Home stats fetch failed. Falling back to zeros.", error);
         if (!cancelled) {
           setTasks([]);
-          setSelectedCategory("All");
         }
       }
     };
@@ -145,79 +182,59 @@ export default function HomeScreen() {
     };
   }, [userId]);
 
-  const normalizeCategory = (value?: string | null) => {
-    const trimmed = value?.trim();
-    return trimmed && trimmed.length > 0 ? trimmed : "Uncategorized";
-  };
+  const today = new Date().toISOString().slice(0, 10);
 
-  const taskCategories = useMemo<CategoryPill[]>(() => {
-    const counts = new Map<string, number>();
-
-    for (const task of tasks) {
-      const category = normalizeCategory(task.category);
-      counts.set(category, (counts.get(category) ?? 0) + 1);
-    }
-
-    const fixedCategories = FIXED_CATEGORY_ORDER.filter((label) => counts.has(label));
-    const otherCategories = [...counts.keys()]
-      .filter((label) => !FIXED_CATEGORY_ORDER.includes(label))
-      .sort((a, b) => a.localeCompare(b));
-    const ordered = ["All", ...fixedCategories, ...otherCategories];
-
-    return ordered.map((label) => ({
-      active: selectedCategory === label,
-      count: label === "All" ? tasks.length : counts.get(label) ?? 0,
-      label,
-    }));
-  }, [selectedCategory, tasks]);
-
-  useEffect(() => {
-    if (selectedCategory === "All") {
-      return;
-    }
-
-    const categoryExists = tasks.some((task) => normalizeCategory(task.category) === selectedCategory);
-    if (!categoryExists) {
-      setSelectedCategory("All");
-    }
-  }, [selectedCategory, tasks]);
-
-  const taskStats = useMemo<TaskStats>(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const filteredTasks =
-      selectedCategory === "All"
-        ? tasks
-        : tasks.filter((task) => normalizeCategory(task.category) === selectedCategory);
-
-    if (filteredTasks.length === 0) {
-      return ZERO_TASK_STATS;
-    }
-
+  const overallStats = useMemo<TaskStats>(() => {
     let done = 0;
     let overdue = 0;
+    let remaining = 0;
 
-    for (const task of filteredTasks) {
+    for (const task of tasks) {
       const status = task.status?.trim().toLowerCase() ?? "";
-      const isDone = status === "done";
-
-      if (isDone) {
-        done += 1;
-      }
-
       const dueDate = task.due_date?.slice(0, 10);
-      if (dueDate && dueDate < today && !isDone) {
+      const isOverdue = status !== "done" && Boolean(dueDate && dueDate < today);
+
+      if (status === "done") {
+        done += 1;
+      } else if (isOverdue) {
         overdue += 1;
+      } else if (status === "todo") {
+        remaining += 1;
       }
     }
 
-    const total = filteredTasks.length;
     return {
       done,
       overdue,
-      remaining: total - done,
-      total,
+      remaining,
+      total: done + remaining + overdue,
     };
-  }, [selectedCategory, tasks]);
+  }, [tasks, today]);
+
+  const categoryStats = useMemo<CategoryStats>(() => {
+    const initial: CategoryStats = {
+      Docs: { done: 0, total: 0 },
+      General: { done: 0, total: 0 },
+      Immigration: { done: 0, total: 0 },
+      School: { done: 0, total: 0 },
+    };
+
+    for (const task of tasks) {
+      const category = task.category?.trim();
+      if (category === "General" || category === "Docs" || category === "School" || category === "Immigration") {
+        initial[category].total += 1;
+        if ((task.status ?? "").toLowerCase() === "done") {
+          initial[category].done += 1;
+        }
+      }
+    }
+
+    return initial;
+  }, [tasks]);
+
+  const completionPercent = overallStats.total > 0 ? Math.round((overallStats.done / overallStats.total) * 100) : 0;
+  const docsCount = categoryStats.Docs.total;
+  const upcomingCount = overallStats.remaining;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: tokens.bg }]} edges={["top"]}>
@@ -227,100 +244,149 @@ export default function HomeScreen() {
             <Text style={[styles.hi, { color: tokens.text }]}>{greeting}</Text>
             <Text style={[styles.welcome, { color: tokens.mutedText }]}>Welcome back</Text>
           </View>
-          <View style={[styles.refreshBtn, { backgroundColor: tokens.card, borderColor: tokens.border }]}>
-            <Ionicons name="sync" size={20} color={tokens.primaryBlue} />
-          </View>
+          <Pressable
+            onPress={() => console.log("TODO: refresh")}
+            style={[styles.refreshBtn, { backgroundColor: tokens.card, borderColor: tokens.border, shadowColor: tokens.shadow }]}
+          >
+            <Ionicons name="refresh" size={18} color={tokens.primaryBlue} />
+          </Pressable>
         </View>
 
-        <View style={styles.topCardsRow}>
-          <Card gradient style={styles.statusCard}>
-            <Text style={styles.statusTitle}>Status countdown</Text>
-            <Text style={styles.statusValue}>Permit: 109 days</Text>
-            <Text style={styles.statusValue}>Program: 129 days</Text>
-            <View style={styles.trackPill}>
-              <Text style={styles.trackText}>On track</Text>
-            </View>
-          </Card>
-
-          <Card style={styles.progressSmallCard}>
-            <Text style={[styles.progressTitle, { color: tokens.text }]}>Profile{"\n"}completeness</Text>
-            <Text style={[styles.progressBig, { color: tokens.primaryBlue }]}>100%</Text>
-            <Text style={[styles.progressHint, { color: tokens.mutedText }]}>All essentials completed</Text>
-          </Card>
-        </View>
-
-        <Card style={styles.progressCard}>
-          <Text style={[styles.progressTitle, { color: tokens.text }]}>Task Progress</Text>
-          <View style={styles.progressContent}>
-            <Donut done={taskStats.done} total={taskStats.total} overdue={taskStats.overdue} size={120} strokeWidth={12} />
-            <View style={styles.statList}>
-              <Stat label="Done" value={taskStats.done} color={tokens.success} />
-              <Stat label="Remaining" value={taskStats.remaining} color={tokens.primaryBlue} />
-              <Stat label="Overdue" value={taskStats.overdue} color={tokens.warning} />
-              <Stat label="Total" value={taskStats.total} color={tokens.text} />
-            </View>
+        <LinearGradient
+          colors={[tokens.primaryBlue, tokens.primaryBlueDark || "#0F5FE6"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.statusCard, { shadowColor: tokens.shadow }]}
+        >
+          <View style={styles.statusLeft}>
+            <Text style={styles.statusHeader}>Your status</Text>
+            <Text style={styles.statusMain}>You&apos;re on track</Text>
+            <Pressable onPress={() => router.push("/(tabs)/tasks")} style={styles.statusButton}>
+              <Text style={styles.statusButtonText}>View Tasks</Text>
+            </Pressable>
+            <Text style={styles.statusFooter}>
+              {overallStats.remaining} remaining • {overallStats.overdue} overdue
+            </Text>
           </View>
-        </Card>
-
-        <View style={styles.pillsRow}>
-          {taskCategories.map((item) => (
-            <Pill
-              key={item.label}
-              label={item.label}
-              count={item.count}
-              active={item.active}
-              onPress={() => {
-                setSelectedCategory(item.label);
-              }}
+          <View style={styles.statusRight}>
+            <CategoryRing
+              percent={completionPercent}
+              size={108}
+              strokeWidth={10}
+              color="#FFFFFF"
+              trackColor="rgba(255,255,255,0.28)"
+              textColor="#FFFFFF"
             />
-          ))}
+          </View>
+        </LinearGradient>
+
+        <Text style={[styles.sectionTitle, { color: tokens.text }]}>In Progress</Text>
+        <View style={styles.progressGrid}>
+          <Pressable style={styles.progressTilePress} onPress={() => router.push("/(tabs)/vault")}>
+            <Card style={[styles.progressTile, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
+              <View style={[styles.tileIconWrap, { backgroundColor: tokens.categoryColors.Docs.bg }]}>
+                <Ionicons name="folder-open-outline" size={18} color={tokens.categoryColors.Docs.fg} />
+              </View>
+              <Text style={[styles.tileTitle, { color: tokens.text }]}>Docs Vault</Text>
+              <Text style={[styles.tileSub, { color: tokens.mutedText }]}>{docsCount} files</Text>
+            </Card>
+          </Pressable>
+
+          <Pressable style={styles.progressTilePress} onPress={() => router.push("/(tabs)/reminders")}>
+            <Card style={[styles.progressTile, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
+              <View style={[styles.tileIconWrap, { backgroundColor: tokens.categoryColors.Immigration.bg }]}>
+                <Ionicons name="notifications-outline" size={18} color={tokens.categoryColors.Immigration.fg} />
+              </View>
+              <Text style={[styles.tileTitle, { color: tokens.text }]}>Reminders</Text>
+              <Text style={[styles.tileSub, { color: tokens.mutedText }]}>{upcomingCount} upcoming</Text>
+            </Card>
+          </Pressable>
         </View>
 
-        <View style={styles.grid}>
-          {quickCards.map((item) => (
-            <Card key={item.title} style={styles.quickCard}>
-              <View style={styles.quickHead}>
-                <Text style={[styles.quickTitle, { color: tokens.text }]}>{item.title}</Text>
-                <Ionicons name={item.icon} size={20} color={isDark ? tokens.primaryBlue2 : tokens.primaryBlue} />
-              </View>
-              <Text style={[styles.quickSubtitle, { color: tokens.mutedText }]}>{item.subtitle}</Text>
-              <Text style={[styles.quickRoute, { color: tokens.primaryBlue }]}>{item.route}</Text>
-            </Card>
-          ))}
-        </View>
+        <Text style={[styles.sectionTitle, { color: tokens.text }]}>Task Groups</Text>
+        <Card style={[styles.groupListCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
+          {GROUPS.map((group, index) => {
+            const stats = categoryStats[group.label];
+            const percent = stats.total > 0 ? Math.round((stats.done / stats.total) * 100) : 0;
+            const accent = tokens.categoryColors[group.label];
+
+            return (
+              <Pressable
+                key={group.label}
+                onPress={() =>
+                  router.push({
+                    pathname: "/(tabs)/tasks",
+                    params: { category: group.label },
+                  })
+                }
+                style={[
+                  styles.groupRow,
+                  index < GROUPS.length - 1 && { borderBottomColor: tokens.border, borderBottomWidth: StyleSheet.hairlineWidth },
+                ]}
+              >
+                <View style={styles.groupLeft}>
+                  <View style={[styles.groupIconTile, { backgroundColor: accent.bg }]}>
+                    <Ionicons name={group.icon} size={18} color={accent.fg} />
+                  </View>
+                  <View>
+                    <Text style={[styles.groupLabel, { color: tokens.text }]}>{group.label}</Text>
+                    <Text style={[styles.groupSub, { color: tokens.mutedText }]}>{stats.total} tasks</Text>
+                  </View>
+                </View>
+                <CategoryRing
+                  percent={percent}
+                  size={40}
+                  strokeWidth={5}
+                  color={accent.fg}
+                  trackColor={accent.bg}
+                  textColor={accent.fg}
+                />
+              </Pressable>
+            );
+          })}
+        </Card>
       </ScrollView>
     </SafeAreaView>
-  );
-}
-
-function Stat({ label, value, color }: { label: string; value: number; color: string }) {
-  const { tokens } = useTheme();
-
-  return (
-    <View style={styles.statRow}>
-      <View style={[styles.dot, { backgroundColor: color }]} />
-      <Text style={[styles.statLabel, { color: tokens.mutedText }]}>{label}</Text>
-      <Text style={[styles.statValue, { color: tokens.text }]}>{value}</Text>
-    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     gap: 14,
-    paddingBottom: 110,
+    paddingBottom: 120,
     paddingHorizontal: 18,
     paddingTop: 10,
   },
-  dot: {
-    borderRadius: 99,
-    height: 8,
-    width: 8,
+  groupIconTile: {
+    alignItems: "center",
+    borderRadius: 11,
+    height: 38,
+    justifyContent: "center",
+    width: 38,
   },
-  grid: {
+  groupLabel: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  groupLeft: {
+    alignItems: "center",
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
+    gap: 12,
+  },
+  groupListCard: {
+    borderRadius: 20,
+    paddingVertical: 4,
+  },
+  groupRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 72,
+    paddingHorizontal: 6,
+  },
+  groupSub: {
+    fontSize: 13,
+    marginTop: 2,
   },
   headerRow: {
     alignItems: "center",
@@ -331,119 +397,113 @@ const styles = StyleSheet.create({
     fontSize: 42,
     fontWeight: "800",
   },
-  pillsRow: {
+  progressGrid: {
     flexDirection: "row",
-    flexWrap: "wrap",
     gap: 10,
   },
-  progressBig: {
-    fontSize: 34,
-    fontWeight: "800",
-    marginTop: 12,
+  progressTile: {
+    borderRadius: 20,
+    minHeight: 122,
   },
-  progressCard: {
-    gap: 12,
-  },
-  progressContent: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 16,
-  },
-  progressHint: {
-    fontSize: 13,
-    marginTop: 4,
-  },
-  progressSmallCard: {
+  progressTilePress: {
     flex: 1,
-    minHeight: 160,
-  },
-  progressTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-  },
-  quickCard: {
-    flexGrow: 1,
-    minHeight: 118,
-    width: "48%",
-  },
-  quickHead: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  quickRoute: {
-    fontSize: 13,
-    fontWeight: "700",
-    marginTop: 12,
-  },
-  quickSubtitle: {
-    fontSize: 16,
-    marginTop: 8,
-  },
-  quickTitle: {
-    fontSize: 23,
-    fontWeight: "800",
   },
   refreshBtn: {
     alignItems: "center",
-    borderRadius: 14,
+    borderRadius: 999,
     borderWidth: 1,
-    height: 48,
+    elevation: 4,
+    height: 42,
     justifyContent: "center",
-    width: 48,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    width: 42,
+  },
+  ringLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  ringLabelWrap: {
+    alignItems: "center",
+    bottom: 0,
+    justifyContent: "center",
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
   },
   safe: {
     flex: 1,
   },
-  statLabel: {
-    flex: 1,
-    fontSize: 14,
-  },
-  statList: {
-    flex: 1,
-    gap: 9,
-  },
-  statRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8,
-  },
-  statValue: {
-    fontSize: 15,
+  sectionTitle: {
+    fontSize: 22,
     fontWeight: "800",
+    marginTop: 2,
+  },
+  statusButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 999,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    width: 104,
+  },
+  statusButtonText: {
+    color: "#0F5FE6",
+    fontSize: 12,
+    fontWeight: "700",
   },
   statusCard: {
-    flex: 1,
-    minHeight: 160,
+    borderRadius: 24,
+    flexDirection: "row",
+    minHeight: 186,
+    padding: 18,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
   },
-  statusTitle: {
-    color: "#EAF8FF",
+  statusFooter: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 13,
+    marginTop: 14,
+  },
+  statusHeader: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  statusLeft: {
+    flex: 1,
+    paddingRight: 14,
+  },
+  statusMain: {
+    color: "#FFFFFF",
+    fontSize: 34,
+    fontWeight: "800",
+    lineHeight: 38,
+    marginTop: 8,
+    maxWidth: 220,
+  },
+  statusRight: {
+    justifyContent: "center",
+  },
+  tileIconWrap: {
+    alignItems: "center",
+    borderRadius: 10,
+    height: 34,
+    justifyContent: "center",
+    width: 34,
+  },
+  tileSub: {
+    fontSize: 14,
+    marginTop: 4,
+  },
+  tileTitle: {
     fontSize: 18,
     fontWeight: "700",
-  },
-  statusValue: {
-    color: "#FFFFFF",
-    fontSize: 22,
-    fontWeight: "700",
-    marginTop: 8,
-  },
-  topCardsRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  trackPill: {
-    alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(255,255,255,0.24)",
-    borderRadius: 999,
-    marginTop: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  trackText: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "700",
+    marginTop: 12,
   },
   welcome: {
     fontSize: 20,

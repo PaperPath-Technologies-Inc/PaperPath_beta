@@ -59,6 +59,7 @@ export default function TabsLayout() {
       />
       <Tabs.Screen name="reminders" options={{ href: null }} />
       <Tabs.Screen name="airisk" options={{ href: null }} />
+      <Tabs.Screen name="crs" options={{ href: null }} />
       <Tabs.Screen name="pricing" options={{ href: null }} />
       <Tabs.Screen name="support" options={{ href: null }} />
       <Tabs.Screen
