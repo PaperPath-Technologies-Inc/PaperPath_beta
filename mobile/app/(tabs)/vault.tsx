@@ -1,9 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useMemo, useState } from "react";
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Card } from "@/src/components/Card";
+import { isSupabaseConfigured, supabase } from "@/src/lib/supabase";
+import { useAuth } from "@/src/lib/useAuth";
 import { useTheme } from "@/src/theme/useTheme";
 
 type VaultCategory = "All" | "Immigration" | "Docs" | "School" | "General";
@@ -16,53 +20,306 @@ type FolderItem = {
   title: string;
 };
 
-type UploadItem = {
-  category: FolderCategory;
-  date: string;
-  fileType: "PDF" | "JPG" | "DOC";
-  icon: keyof typeof Ionicons.glyphMap;
+type VaultDocumentRow = {
+  id: string;
+  user_id: string;
   name: string;
+  category: FolderCategory;
+  file_type: string | null;
+  mime_type: string | null;
+  size: number | null;
+  storage_path: string;
+  created_at: string;
 };
 
 const CHIPS: VaultCategory[] = ["All", "Immigration", "Docs", "School", "General"];
 
-const FOLDERS: FolderItem[] = [
-  { category: "Immigration", count: 8, icon: "airplane-outline", title: "Immigration" },
-  { category: "Docs", count: 6, icon: "document-text-outline", title: "Docs" },
-  { category: "School", count: 4, icon: "school-outline", title: "School" },
-  { category: "General", count: 5, icon: "folder-open-outline", title: "General" },
+const FOLDER_META: Omit<FolderItem, "count">[] = [
+  { category: "Immigration", icon: "airplane-outline", title: "Immigration" },
+  { category: "Docs", icon: "document-text-outline", title: "Docs" },
+  { category: "School", icon: "school-outline", title: "School" },
+  { category: "General", icon: "folder-open-outline", title: "General" },
 ];
 
-const RECENT_UPLOADS: UploadItem[] = [
-  { category: "Immigration", date: "May 30", fileType: "PDF", icon: "document-outline", name: "Work Permit Checklist.pdf" },
-  { category: "School", date: "May 28", fileType: "JPG", icon: "image-outline", name: "Transcript_Sem2.jpg" },
-  { category: "Docs", date: "May 24", fileType: "DOC", icon: "document-text-outline", name: "Reference Letter.docx" },
-];
+const ACCEPTED_CATEGORIES: FolderCategory[] = ["Immigration", "Docs", "School", "General"];
+
+function formatDateLabel(value: string | null | undefined) {
+  if (!value) return "Unknown date";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function normalizeCategory(value: string | null | undefined): FolderCategory {
+  if (value && ACCEPTED_CATEGORIES.includes(value as FolderCategory)) {
+    return value as FolderCategory;
+  }
+  return "General";
+}
+
+function extractExtension(name: string) {
+  const parts = name.split(".");
+  if (parts.length < 2) return "FILE";
+  return parts[parts.length - 1].toUpperCase();
+}
+
+function isMissingVaultTableError(error: unknown) {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message?: string }).message ?? "").toLowerCase()
+      : "";
+  return message.includes("vault_documents") || message.includes("relation") || message.includes("does not exist");
+}
+
+function pickRowIcon(mimeType: string | null, fileType: string | null) {
+  const mime = (mimeType ?? "").toLowerCase();
+  const ext = (fileType ?? "").toLowerCase();
+
+  if (mime.startsWith("image/") || ["jpg", "jpeg", "png", "webp"].includes(ext)) {
+    return "image-outline" as const;
+  }
+
+  if (mime.includes("pdf") || ext === "pdf") {
+    return "document-outline" as const;
+  }
+
+  return "document-text-outline" as const;
+}
+
+function buildStoragePath(userId: string, fileName: string) {
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return `${userId}/${Date.now()}-${safeName}`;
+}
 
 export default function VaultScreen() {
   const { tokens } = useTheme();
   const { width } = useWindowDimensions();
+  const { session } = useAuth();
+
+  const userId = session?.user.id;
+
   const [selectedCategory, setSelectedCategory] = useState<VaultCategory>("All");
   const [query, setQuery] = useState("");
+  const [documents, setDocuments] = useState<VaultDocumentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [tableAvailable, setTableAvailable] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const itemWidth = (width - 18 * 2 - 10) / 2;
 
-  const filteredFolders = useMemo(() => {
-    return selectedCategory === "All"
-      ? FOLDERS
-      : FOLDERS.filter((folder) => folder.category === selectedCategory);
-  }, [selectedCategory]);
+  const loadDocuments = useCallback(async () => {
+    if (!userId || !isSupabaseConfigured) {
+      setDocuments([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const response = await supabase
+        .from("vault_documents")
+        .select("id, user_id, name, category, file_type, mime_type, size, storage_path, created_at")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+      if (response.error) {
+        if (isMissingVaultTableError(response.error)) {
+          setTableAvailable(false);
+          setDocuments([]);
+          setErrorMessage("Vault table is not available yet.");
+          return;
+        }
+        throw response.error;
+      }
+
+      setTableAvailable(true);
+      const rows = (response.data ?? []) as VaultDocumentRow[];
+      setDocuments(
+        rows.map((row) => ({
+          ...row,
+          category: normalizeCategory(row.category),
+        }))
+      );
+    } catch (error) {
+      console.warn("Failed to load vault documents", error);
+      setDocuments([]);
+      setErrorMessage("Could not load documents.");
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadDocuments();
+    }, [loadDocuments])
+  );
+
+  const folderCounts = useMemo(() => {
+    return {
+      Immigration: documents.filter((doc) => doc.category === "Immigration").length,
+      Docs: documents.filter((doc) => doc.category === "Docs").length,
+      School: documents.filter((doc) => doc.category === "School").length,
+      General: documents.filter((doc) => doc.category === "General").length,
+    };
+  }, [documents]);
+
+  const folders = useMemo<FolderItem[]>(() => {
+    return FOLDER_META.map((item) => ({
+      ...item,
+      count: folderCounts[item.category],
+    }));
+  }, [folderCounts]);
 
   const filteredUploads = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return RECENT_UPLOADS.filter((file) => {
+    return documents.filter((file) => {
       const categoryMatch = selectedCategory === "All" || file.category === selectedCategory;
       const queryMatch = !q || file.name.toLowerCase().includes(q);
       return categoryMatch && queryMatch;
     });
-  }, [query, selectedCategory]);
+  }, [documents, query, selectedCategory]);
+
+  const totalCount = documents.length;
+
+  const askCategory = () => {
+    return new Promise<FolderCategory | null>((resolve) => {
+      Alert.alert("Select category", "Choose a category for this document.", [
+        { text: "Immigration", onPress: () => resolve("Immigration") },
+        { text: "Docs", onPress: () => resolve("Docs") },
+        { text: "School", onPress: () => resolve("School") },
+        { text: "General", onPress: () => resolve("General") },
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+      ]);
+    });
+  };
+
+  const handleUploadPress = async () => {
+    if (!userId) {
+      Alert.alert("Sign in required", "Please sign in to upload documents.");
+      return;
+    }
+
+    if (!isSupabaseConfigured) {
+      Alert.alert("Supabase not configured", "Set Supabase environment variables before uploading.");
+      return;
+    }
+
+    if (!tableAvailable) {
+      Alert.alert("Vault unavailable", "The vault_documents table is missing. Create it before uploading.");
+      return;
+    }
+
+    try {
+      const category = await askCategory();
+      if (!category) return;
+
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ["application/pdf", "image/*", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (!result || result.canceled) {
+        return;
+      }
+
+      const asset = result.assets?.[0];
+      if (!asset?.uri || !asset.name) {
+        Alert.alert("Upload failed", "Selected file is missing required metadata.");
+        return;
+      }
+
+      setUploading(true);
+
+      const fileResponse = await fetch(asset.uri);
+      if (!fileResponse.ok) {
+        throw new Error("Could not read selected file.");
+      }
+      const arrayBuffer = await fileResponse.arrayBuffer();
+
+      const storagePath = buildStoragePath(userId, asset.name);
+      const mimeType = asset.mimeType ?? null;
+      const fileType = extractExtension(asset.name);
+      const size = typeof asset.size === "number" ? asset.size : arrayBuffer.byteLength;
+
+      const uploadResult = await supabase.storage.from("vault").upload(storagePath, arrayBuffer, {
+        contentType: mimeType ?? "application/octet-stream",
+        upsert: false,
+      });
+
+      if (uploadResult.error) {
+        throw uploadResult.error;
+      }
+
+      const insertResult = await supabase.from("vault_documents").insert({
+        user_id: userId,
+        name: asset.name,
+        category,
+        file_type: fileType,
+        mime_type: mimeType,
+        size,
+        storage_path: storagePath,
+      });
+
+      if (insertResult.error) {
+        throw insertResult.error;
+      }
+
+      Alert.alert("Uploaded", `${asset.name} uploaded successfully.`);
+      await loadDocuments();
+    } catch (err) {
+      console.warn("Vault upload failed", err);
+      const message = err instanceof Error ? err.message : String(err);
+      Alert.alert("Upload failed", message || "Could not upload file.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const openDocument = async (doc: VaultDocumentRow) => {
+    if (!isSupabaseConfigured) {
+      Alert.alert("Unavailable", "Supabase is not configured.");
+      return;
+    }
+
+    try {
+      const signed = await supabase.storage.from("vault").createSignedUrl(doc.storage_path, 60 * 10);
+      if (signed.error || !signed.data?.signedUrl) {
+        throw signed.error ?? new Error("Could not create file URL.");
+      }
+
+      const canOpen = await Linking.canOpenURL(signed.data.signedUrl);
+      if (!canOpen) {
+        throw new Error("No app available to preview this file.");
+      }
+
+      await Linking.openURL(signed.data.signedUrl);
+    } catch (err) {
+      console.warn("Open document failed", err);
+      const message = err instanceof Error ? err.message : String(err);
+      Alert.alert("Preview failed", message || "Could not open file preview.");
+    }
+  };
+
+  if (!userId) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: tokens.bg }]}> 
+        <View style={styles.screen}>
+          <View style={styles.emptyStateWrap}>
+            <Text style={[styles.title, { color: tokens.text }]}>Docs Vault</Text>
+            <Text style={[styles.emptyCopy, { color: tokens.mutedText }]}>Please sign in to manage documents.</Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: tokens.bg }]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: tokens.bg }]}> 
       <View style={styles.screen}>
         <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
           <View style={styles.headerRow}>
@@ -71,15 +328,24 @@ export default function VaultScreen() {
               <Text style={[styles.subtitle, { color: tokens.mutedText }]}>Your documents, organized</Text>
             </View>
             <Pressable
-              onPress={() => console.log("TODO: upload")}
-              style={[styles.uploadButton, { backgroundColor: tokens.primaryBlue }]}
+              onPress={() => {
+                void handleUploadPress();
+              }}
+              disabled={uploading || loading}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={[styles.uploadButton, { backgroundColor: tokens.primaryBlue, opacity: uploading || loading ? 0.7 : 1 }]}
             >
               <Ionicons name="cloud-upload-outline" size={16} color="#FFFFFF" />
-              <Text style={styles.uploadText}>Upload</Text>
+              <Text style={styles.uploadText}>{uploading ? "Uploading..." : "Upload"}</Text>
             </Pressable>
           </View>
 
-          <View style={[styles.searchWrap, { backgroundColor: tokens.card, borderColor: tokens.border, shadowColor: tokens.shadow }]}>
+          <View
+            style={[
+              styles.searchWrap,
+              { backgroundColor: tokens.card, borderColor: tokens.border, shadowColor: tokens.shadow },
+            ]}
+          >
             <Ionicons name="search-outline" size={18} color={tokens.mutedText} />
             <TextInput
               value={query}
@@ -93,9 +359,7 @@ export default function VaultScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
             {CHIPS.map((chip) => {
               const accent = chip === "All" ? tokens.primaryBlue : tokens.categoryColors[chip].fg;
-              const count = chip === "All"
-                ? FOLDERS.reduce((sum, folder) => sum + folder.count, 0)
-                : FOLDERS.find((folder) => folder.category === chip)?.count ?? 0;
+              const count = chip === "All" ? totalCount : folderCounts[chip];
 
               return (
                 <Pressable
@@ -118,53 +382,62 @@ export default function VaultScreen() {
           </ScrollView>
 
           <Text style={[styles.sectionTitle, { color: tokens.text }]}>Folders</Text>
-          {filteredFolders.length === 0 ? (
-            <Card style={[styles.emptyCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
-              <Ionicons name="folder-open-outline" size={28} color={tokens.mutedText} />
-              <Text style={[styles.emptyTitle, { color: tokens.text }]}>No folders yet</Text>
-              <Text style={[styles.emptyCopy, { color: tokens.mutedText }]}>Upload your first document</Text>
-            </Card>
-          ) : (
-            <View style={styles.folderGrid}>
-              {filteredFolders.map((folder, idx) => {
-                const accent = tokens.categoryColors[folder.category];
-                const isLeft = idx % 2 === 0;
-                return (
-                  <View
-                    key={folder.title}
-                    style={[styles.folderItem, { width: itemWidth, marginRight: isLeft ? 10 : 0 }]}
+          <View style={styles.folderGrid}>
+            {folders.map((folder, idx) => {
+              const accent = tokens.categoryColors[folder.category];
+              const isLeft = idx % 2 === 0;
+              const active = selectedCategory === folder.category;
+              return (
+                <Pressable
+                  key={folder.title}
+                  onPress={() => setSelectedCategory((prev) => (prev === folder.category ? "All" : folder.category))}
+                  style={[styles.folderItem, { width: itemWidth, marginRight: isLeft ? 10 : 0 }]}
+                >
+                  <Card
+                    padded={false}
+                    style={[
+                      styles.folderCard,
+                      {
+                        borderColor: active ? accent.fg : tokens.border,
+                        borderWidth: 1,
+                        shadowColor: tokens.shadow,
+                      },
+                    ]}
                   >
-                    <Card
-                      padded={false}
-                      style={[styles.folderCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}
-                    >
-                      <View style={[styles.folderIconTile, { backgroundColor: accent.bg }]}>
-                        <Ionicons name={folder.icon} size={18} color={accent.fg} />
-                      </View>
-                      <Text style={[styles.folderTitle, { color: tokens.text }]}>{folder.title}</Text>
-                      <Text style={[styles.folderCount, { color: tokens.mutedText }]}>{folder.count} files</Text>
-                    </Card>
-                  </View>
-                );
-              })}
-            </View>
-          )}
+                    <View style={[styles.folderIconTile, { backgroundColor: accent.bg }]}> 
+                      <Ionicons name={folder.icon} size={18} color={accent.fg} />
+                    </View>
+                    <Text style={[styles.folderTitle, { color: tokens.text }]}>{folder.title}</Text>
+                    <Text style={[styles.folderCount, { color: tokens.mutedText }]}>{folder.count} files</Text>
+                  </Card>
+                </Pressable>
+              );
+            })}
+          </View>
 
           <Text style={[styles.sectionTitle, { color: tokens.text }]}>Recent uploads</Text>
-          {filteredUploads.length === 0 ? (
-            <Card style={[styles.emptyCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
+          {loading ? (
+            <Card style={[styles.emptyCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
+              <Text style={[styles.emptyTitle, { color: tokens.text }]}>Loading documents...</Text>
+            </Card>
+          ) : filteredUploads.length === 0 ? (
+            <Card style={[styles.emptyCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
               <Ionicons name="cloud-upload-outline" size={28} color={tokens.mutedText} />
-              <Text style={[styles.emptyTitle, { color: tokens.text }]}>No recent uploads</Text>
-              <Text style={[styles.emptyCopy, { color: tokens.mutedText }]}>Upload your first document</Text>
+              <Text style={[styles.emptyTitle, { color: tokens.text }]}>No documents found</Text>
+              <Text style={[styles.emptyCopy, { color: tokens.mutedText }]}>Upload a file to get started.</Text>
             </Card>
           ) : (
-            <Card style={[styles.recentCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
+            <Card style={[styles.recentCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
               {filteredUploads.map((item, index) => {
                 const accent = tokens.categoryColors[item.category];
+                const rowIcon = pickRowIcon(item.mime_type, item.file_type);
+
                 return (
                   <Pressable
-                    key={item.name}
-                    onPress={() => console.log(`TODO: open ${item.name}`)}
+                    key={item.id}
+                    onPress={() => {
+                      void openDocument(item);
+                    }}
                     style={[
                       styles.fileRow,
                       index < filteredUploads.length - 1 && {
@@ -173,15 +446,15 @@ export default function VaultScreen() {
                       },
                     ]}
                   >
-                    <View style={[styles.fileIconTile, { backgroundColor: accent.bg }]}>
-                      <Ionicons name={item.icon} size={17} color={accent.fg} />
+                    <View style={[styles.fileIconTile, { backgroundColor: accent.bg }]}> 
+                      <Ionicons name={rowIcon} size={17} color={accent.fg} />
                     </View>
                     <View style={styles.fileTextWrap}>
                       <Text style={[styles.fileName, { color: tokens.text }]} numberOfLines={1}>
                         {item.name.replace(/_/g, " ")}
                       </Text>
-                      <Text style={[styles.fileMeta, { color: tokens.mutedText }]}>
-                        {item.fileType} • {item.date}
+                      <Text style={[styles.fileMeta, { color: tokens.mutedText }]}> 
+                        {(item.file_type || extractExtension(item.name)).toUpperCase()} • {formatDateLabel(item.created_at)}
                       </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={18} color={tokens.mutedText} />
@@ -190,6 +463,8 @@ export default function VaultScreen() {
               })}
             </Card>
           )}
+
+          {errorMessage ? <Text style={[styles.errorText, { color: tokens.danger }]}>{errorMessage}</Text> : null}
         </ScrollView>
       </View>
     </SafeAreaView>
@@ -200,9 +475,9 @@ const styles = StyleSheet.create({
   chip: {
     borderRadius: 999,
     borderWidth: 1,
+    justifyContent: "center",
     minHeight: 40,
     paddingHorizontal: 14,
-    justifyContent: "center",
   },
   chipText: {
     fontSize: 14,
@@ -226,10 +501,22 @@ const styles = StyleSheet.create({
   },
   emptyCopy: {
     fontSize: 14,
+    textAlign: "center",
+  },
+  emptyStateWrap: {
+    alignItems: "center",
+    flex: 1,
+    gap: 8,
+    justifyContent: "center",
+    paddingHorizontal: 20,
   },
   emptyTitle: {
     fontSize: 17,
     fontWeight: "700",
+  },
+  errorText: {
+    fontSize: 13,
+    textAlign: "center",
   },
   fileIconTile: {
     alignItems: "center",

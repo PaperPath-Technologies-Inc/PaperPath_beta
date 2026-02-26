@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
+import { useFocusEffect } from "@react-navigation/native";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -92,56 +93,43 @@ export default function HomeScreen() {
   const [tasks, setTasks] = useState<TaskRow[]>([]);
 
   const userId = session?.user.id;
-  const emailPrefix = session?.user.email?.split("@")[0]?.trim() || null;
-  const greeting = displayName ? `Hi ${displayName}` : "Hi";
+  const greetingName = displayName?.trim().split(/\s+/)[0];
+  const greeting = greetingName ? `Hi, ${greetingName}` : "Hi there";
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadDisplayName = useCallback(async () => {
+    if (!userId || !isSupabaseConfigured) {
+      setDisplayName(null);
+      return;
+    }
 
-    const loadDisplayName = async () => {
-      if (!userId) {
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (error) {
         setDisplayName(null);
         return;
       }
 
-      if (!isSupabaseConfigured) {
-        setDisplayName(emailPrefix);
-        return;
-      }
+      const row = data as { full_name?: string | null } | null;
+      setDisplayName(row?.full_name?.trim() || null);
+    } catch {
+      setDisplayName(null);
+    }
+  }, [userId]);
 
-      try {
-        const firstTry = await supabase.from("profiles").select("full_name, name").eq("id", userId).maybeSingle();
+  useEffect(() => {
+    void loadDisplayName();
+  }, [loadDisplayName]);
 
-        if (!cancelled && !firstTry.error) {
-          const row = firstTry.data as { full_name?: string | null; name?: string | null } | null;
-          const profileName = row?.full_name?.trim() || row?.name?.trim() || null;
-          setDisplayName(profileName || emailPrefix);
-          return;
-        }
-
-        const fallbackTry = await supabase.from("profiles").select("name").eq("id", userId).maybeSingle();
-        if (!cancelled && !fallbackTry.error) {
-          const row = fallbackTry.data as { name?: string | null } | null;
-          setDisplayName(row?.name?.trim() || emailPrefix);
-          return;
-        }
-
-        if (!cancelled) {
-          setDisplayName(emailPrefix);
-        }
-      } catch {
-        if (!cancelled) {
-          setDisplayName(emailPrefix);
-        }
-      }
-    };
-
-    loadDisplayName();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [emailPrefix, userId]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadDisplayName();
+    }, [loadDisplayName])
+  );
 
   useEffect(() => {
     let cancelled = false;

@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -68,7 +68,12 @@ export default function TasksScreen() {
   const [categoryInput, setCategoryInput] = useState<Exclude<CategoryFilter, "All">>("General");
 
   const rawCategoryParam = Array.isArray(params.category) ? params.category[0] : params.category;
+  const hasAppliedInitialCategory = useRef(false);
   useEffect(() => {
+    if (hasAppliedInitialCategory.current) {
+      return;
+    }
+    hasAppliedInitialCategory.current = true;
     if (rawCategoryParam && CATEGORY_FILTERS.includes(rawCategoryParam as CategoryFilter)) {
       setSelectedCategory(rawCategoryParam as CategoryFilter);
     }
