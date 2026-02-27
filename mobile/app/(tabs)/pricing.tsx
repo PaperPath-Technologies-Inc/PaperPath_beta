@@ -64,7 +64,7 @@ export default function PricingScreen() {
   const { tokens, isDark } = useTheme();
   const [billing, setBilling] = useState<Billing>("monthly");
 
-  // TODO later: read this from profile.plan (Supabase) or your IAP state
+  // Current selected plan source can be replaced with profile/IAP state when connected.
   const currentPlan: PlanId = "starter";
 
   const proBorder = useMemo(() => {

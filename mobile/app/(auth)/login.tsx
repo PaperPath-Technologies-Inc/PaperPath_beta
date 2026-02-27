@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Link, router } from "expo-router";
 import { useState } from "react";
 import {
+  Alert,
   Image,
   Pressable,
   ScrollView,
@@ -102,7 +103,7 @@ export default function LoginScreen() {
                 <Text style={[styles.metaText, { color: tokens.text }]}>Remember Me</Text>
               </Pressable>
 
-              <Pressable onPress={() => console.log("TODO: forgot password")}>
+              <Pressable onPress={() => Alert.alert("Password reset", "Please contact support@paperpath.ca to reset your password.")}>
                 <Text style={[styles.forgot, { color: tokens.primaryBlue }]}>Forgot Password?</Text>
               </Pressable>
             </View>

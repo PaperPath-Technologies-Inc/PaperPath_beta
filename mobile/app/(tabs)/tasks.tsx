@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Button } from "@/src/components/Button";
@@ -369,10 +369,16 @@ export default function TasksScreen() {
           <View style={styles.headerRow}>
             <Text style={[styles.title, { color: tokens.text }]}>Tasks</Text>
             <View style={styles.headerActions}>
-              <Pressable style={[styles.iconButton, { backgroundColor: tokens.card, borderColor: tokens.border }]} onPress={() => {}}>
+              <Pressable
+                style={[styles.iconButton, { backgroundColor: tokens.card, borderColor: tokens.border }]}
+                onPress={() => Alert.alert("Search", "Task search will be available in an upcoming update.")}
+              >
                 <Ionicons name="search-outline" size={18} color={tokens.text} />
               </Pressable>
-              <Pressable style={[styles.iconButton, { backgroundColor: tokens.card, borderColor: tokens.border }]} onPress={() => {}}>
+              <Pressable
+                style={[styles.iconButton, { backgroundColor: tokens.card, borderColor: tokens.border }]}
+                onPress={() => Alert.alert("Notifications", "Task notifications are managed from Settings and Reminders.")}
+              >
                 <Ionicons name="notifications-outline" size={18} color={tokens.text} />
               </Pressable>
             </View>
@@ -572,10 +578,9 @@ function TaskSectionBlock({
 
   return (
     <View style={styles.sectionBlock}>
-      <Pressable style={styles.sectionHeader} onPress={() => {}}>
+      <View style={styles.sectionHeader}>
         <Text style={[styles.sectionLabel, { color: tokens.text }]}>{label}</Text>
-        <Ionicons name="chevron-down" size={18} color={tokens.mutedText} />
-      </Pressable>
+      </View>
 
       {tasks.length === 0 ? (
         <Card style={[styles.stateCard, { borderColor: tokens.border, borderWidth: 1 }]}>

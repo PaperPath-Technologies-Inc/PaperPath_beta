@@ -1,8 +1,9 @@
-import { Link } from "expo-router";
+import { Link, router } from "expo-router";
 import { useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import {
+  Alert,
   Platform,
   Pressable,
   ScrollView,
@@ -165,14 +166,14 @@ export default function SignupScreen() {
 
           <View style={styles.socialRow}>
             <Pressable
-              onPress={() => console.log("TODO: Google sign in")}
+              onPress={() => Alert.alert("Not available yet", "Google sign in is not enabled yet. Use email sign up for now.")}
               style={[styles.socialButton, { borderColor: tokens.border, backgroundColor: tokens.card }]}
             >
               <Ionicons name="logo-google" size={20} color={tokens.text} />
               <Text style={[styles.socialText, { color: tokens.text }]}>Continue with Google</Text>
             </Pressable>
             <Pressable
-              onPress={() => console.log("TODO: Apple sign in")}
+              onPress={() => Alert.alert("Not available yet", "Apple sign in is not enabled yet. Use email sign up for now.")}
               style={[styles.socialButton, { borderColor: tokens.border, backgroundColor: tokens.card }]}
             >
               <Ionicons name="logo-apple" size={20} color={tokens.text} />
@@ -183,7 +184,7 @@ export default function SignupScreen() {
           <Text style={[styles.disclaimer, { color: tokens.mutedText }]}>
             By signing up you agree to our{" "}
             <Text
-              onPress={() => console.log("TODO: open terms")}
+              onPress={() => router.push("/terms")}
               style={[styles.disclaimerLink, { color: tokens.primaryBlue }]}
             >
               Terms and Conditions of Use.

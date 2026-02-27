@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import Svg, { Circle } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Svg, { Circle } from "react-native-svg";
 
 import { Card } from "@/src/components/Card";
 import { isSupabaseConfigured, supabase } from "@/src/lib/supabase";
@@ -14,10 +14,30 @@ import { useTheme } from "@/src/theme/useTheme";
 
 type CategoryName = "General" | "Docs" | "School" | "Immigration";
 
+type ProfileRow = {
+  full_name?: string | null;
+  city?: string | null;
+  status?: string | null;
+  expiry_date?: string | null;
+  study_permit_expiry_date?: string | null;
+  program_end_date?: string | null;
+};
+
 type TaskRow = {
   category?: string | null;
   due_date?: string | null;
   status?: string | null;
+};
+
+type ReminderRow = {
+  id: string;
+  due_at?: string | null;
+  pinned?: boolean | null;
+};
+
+type VaultRow = {
+  id: string;
+  created_at?: string | null;
 };
 
 type TaskStats = {
@@ -59,14 +79,7 @@ function CategoryRing({
   return (
     <View style={{ width: size, height: size }}>
       <Svg width={size} height={size}>
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke={trackColor}
-          strokeWidth={strokeWidth}
-          fill="none"
-        />
+        <Circle cx={size / 2} cy={size / 2} r={radius} stroke={trackColor} strokeWidth={strokeWidth} fill="none" />
         <Circle
           cx={size / 2}
           cy={size / 2}
@@ -86,91 +99,224 @@ function CategoryRing({
   );
 }
 
+function isMissingColumnError(error: unknown, column: string) {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message?: string }).message ?? "").toLowerCase()
+      : "";
+
+  return (
+    message.includes(`'${column.toLowerCase()}'`) ||
+    message.includes(`\"${column.toLowerCase()}\"`) ||
+    message.includes(`column ${column.toLowerCase()}`)
+  );
+}
+
+function isMissingRelationError(error: unknown, relation: string) {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message?: string }).message ?? "").toLowerCase()
+      : "";
+  return message.includes(relation.toLowerCase()) && (message.includes("does not exist") || message.includes("relation"));
+}
+
+function isCategoryName(value: string | null | undefined): value is CategoryName {
+  return value === "General" || value === "Docs" || value === "School" || value === "Immigration";
+}
+
+function parseDate(value: string | null | undefined) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 export default function HomeScreen() {
   const { tokens } = useTheme();
   const { session } = useAuth();
-  const [displayName, setDisplayName] = useState<string | null>(null);
-  const [tasks, setTasks] = useState<TaskRow[]>([]);
 
   const userId = session?.user.id;
-  const greetingName = displayName?.trim().split(/\s+/)[0];
-  const greeting = greetingName ? `Hi, ${greetingName}` : "Hi there";
+  const emailFallback = session?.user.email?.split("@")[0] ?? "";
 
-  const loadDisplayName = useCallback(async () => {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
+
+  const [profile, setProfile] = useState<ProfileRow | null>(null);
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [reminders, setReminders] = useState<ReminderRow[]>([]);
+  const [vaultDocs, setVaultDocs] = useState<VaultRow[]>([]);
+
+  const [supportsReminderPinned, setSupportsReminderPinned] = useState(true);
+  const [supportsReminderDueAt, setSupportsReminderDueAt] = useState(true);
+
+  const [vaultAvailable, setVaultAvailable] = useState(true);
+  const [tasksCategoryAvailable, setTasksCategoryAvailable] = useState(true);
+
+  const fetchProfile = useCallback(async (uid: string) => {
+    const candidates = [
+      "full_name, city, status, expiry_date, study_permit_expiry_date, program_end_date",
+      "full_name, city, status, expiry_date",
+      "full_name",
+    ];
+
+    for (const select of candidates) {
+      const response = await supabase.from("profiles").select(select).eq("id", uid).maybeSingle();
+      if (response.error) {
+        const missingColumn =
+          isMissingColumnError(response.error, "full_name") ||
+          isMissingColumnError(response.error, "city") ||
+          isMissingColumnError(response.error, "status") ||
+          isMissingColumnError(response.error, "expiry_date") ||
+          isMissingColumnError(response.error, "study_permit_expiry_date") ||
+          isMissingColumnError(response.error, "program_end_date");
+
+        if (missingColumn) {
+          continue;
+        }
+        throw response.error;
+      }
+
+      return (response.data as ProfileRow | null) ?? null;
+    }
+
+    return null;
+  }, []);
+
+  const fetchTasks = useCallback(async (uid: string) => {
+    const candidates: { select: string; supportsCategory: boolean }[] = [
+      { select: "status, due_date, category", supportsCategory: true },
+      { select: "status, due_date", supportsCategory: false },
+      { select: "status", supportsCategory: false },
+    ];
+
+    for (const candidate of candidates) {
+      const response = await supabase.from("tasks").select(candidate.select).eq("user_id", uid);
+      if (response.error) {
+        const missingColumn =
+          isMissingColumnError(response.error, "due_date") ||
+          isMissingColumnError(response.error, "category") ||
+          isMissingColumnError(response.error, "status");
+
+        if (missingColumn) {
+          continue;
+        }
+        throw response.error;
+      }
+
+      setTasksCategoryAvailable(candidate.supportsCategory);
+      return (response.data ?? []) as TaskRow[];
+    }
+
+    setTasksCategoryAvailable(false);
+    return [] as TaskRow[];
+  }, []);
+
+  const fetchReminders = useCallback(async (uid: string) => {
+    const candidates: { select: string; supportsPinned: boolean; supportsDueAt: boolean }[] = [
+      { select: "id, due_at, pinned", supportsPinned: true, supportsDueAt: true },
+      { select: "id, due_at", supportsPinned: false, supportsDueAt: true },
+      { select: "id", supportsPinned: false, supportsDueAt: false },
+    ];
+
+    for (const candidate of candidates) {
+      const response = await supabase.from("reminders").select(candidate.select).eq("user_id", uid);
+      if (response.error) {
+        const missingColumn =
+          isMissingColumnError(response.error, "due_at") || isMissingColumnError(response.error, "pinned");
+
+        if (missingColumn) {
+          continue;
+        }
+        throw response.error;
+      }
+
+      setSupportsReminderPinned(candidate.supportsPinned);
+      setSupportsReminderDueAt(candidate.supportsDueAt);
+
+      return (response.data ?? []) as ReminderRow[];
+    }
+
+    setSupportsReminderPinned(false);
+    setSupportsReminderDueAt(false);
+    return [] as ReminderRow[];
+  }, []);
+
+  const fetchVaultDocs = useCallback(async (uid: string) => {
+    const response = await supabase
+      .from("vault_documents")
+      .select("id, created_at")
+      .eq("user_id", uid)
+      .order("created_at", { ascending: false });
+
+    if (response.error) {
+      if (isMissingRelationError(response.error, "vault_documents")) {
+        setVaultAvailable(false);
+        return [] as VaultRow[];
+      }
+      throw response.error;
+    }
+
+    setVaultAvailable(true);
+    return (response.data ?? []) as VaultRow[];
+  }, []);
+
+  const loadDashboard = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) {
-      setDisplayName(null);
+      setProfile(null);
+      setTasks([]);
+      setReminders([]);
+      setVaultDocs([]);
+      setLoading(false);
       return;
     }
 
+    setErrorText(null);
+
     try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("full_name")
-        .eq("id", userId)
-        .maybeSingle();
+      const [profileData, tasksData, remindersData, vaultData] = await Promise.all([
+        fetchProfile(userId),
+        fetchTasks(userId),
+        fetchReminders(userId),
+        fetchVaultDocs(userId),
+      ]);
 
-      if (error) {
-        setDisplayName(null);
-        return;
-      }
-
-      const row = data as { full_name?: string | null } | null;
-      setDisplayName(row?.full_name?.trim() || null);
-    } catch {
-      setDisplayName(null);
+      setProfile(profileData);
+      setTasks(tasksData);
+      setReminders(remindersData);
+      setVaultDocs(vaultData);
+    } catch (error) {
+      console.warn("Failed to load home dashboard", error);
+      setErrorText("Some dashboard data could not be loaded.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-  }, [userId]);
-
-  useEffect(() => {
-    void loadDisplayName();
-  }, [loadDisplayName]);
+  }, [fetchProfile, fetchReminders, fetchTasks, fetchVaultDocs, userId]);
 
   useFocusEffect(
     useCallback(() => {
-      void loadDisplayName();
-    }, [loadDisplayName])
+      setLoading(true);
+      void loadDashboard();
+    }, [loadDashboard])
   );
 
-  useEffect(() => {
-    let cancelled = false;
+  const greetingName = profile?.full_name?.trim().split(/\s+/)[0] || emailFallback;
+  const greeting = greetingName ? `Hi, ${greetingName}` : "Hi there";
 
-    const loadTasks = async () => {
-      if (!userId || !isSupabaseConfigured) {
-        if (!cancelled) {
-          setTasks([]);
-        }
-        return;
-      }
+  const profileCompletion = useMemo(() => {
+    const values = [
+      profile?.full_name,
+      profile?.city,
+      profile?.status,
+      profile?.expiry_date,
+      profile?.study_permit_expiry_date,
+      profile?.program_end_date,
+    ];
+    const filled = values.filter((value) => Boolean(value && String(value).trim())).length;
+    return Math.round((filled / values.length) * 100);
+  }, [profile]);
 
-      try {
-        const { data, error } = await supabase
-          .from("tasks")
-          .select("status, due_date, category")
-          .eq("user_id", userId);
-
-        if (error) {
-          throw error;
-        }
-
-        if (!cancelled) {
-          setTasks((data ?? []) as TaskRow[]);
-        }
-      } catch (error) {
-        console.warn("Home stats fetch failed. Falling back to zeros.", error);
-        if (!cancelled) {
-          setTasks([]);
-        }
-      }
-    };
-
-    loadTasks();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
-
-  const today = new Date().toISOString().slice(0, 10);
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const overallStats = useMemo<TaskStats>(() => {
     let done = 0;
@@ -180,13 +326,14 @@ export default function HomeScreen() {
     for (const task of tasks) {
       const status = task.status?.trim().toLowerCase() ?? "";
       const dueDate = task.due_date?.slice(0, 10);
-      const isOverdue = status !== "done" && Boolean(dueDate && dueDate < today);
+      const isDone = status === "done";
+      const isOverdue = !isDone && Boolean(dueDate && dueDate < today);
 
-      if (status === "done") {
+      if (isDone) {
         done += 1;
       } else if (isOverdue) {
         overdue += 1;
-      } else if (status === "todo") {
+      } else {
         remaining += 1;
       }
     }
@@ -195,7 +342,7 @@ export default function HomeScreen() {
       done,
       overdue,
       remaining,
-      total: done + remaining + overdue,
+      total: done + overdue + remaining,
     };
   }, [tasks, today]);
 
@@ -208,12 +355,13 @@ export default function HomeScreen() {
     };
 
     for (const task of tasks) {
-      const category = task.category?.trim();
-      if (category === "General" || category === "Docs" || category === "School" || category === "Immigration") {
-        initial[category].total += 1;
-        if ((task.status ?? "").toLowerCase() === "done") {
-          initial[category].done += 1;
-        }
+      if (!isCategoryName(task.category)) {
+        continue;
+      }
+
+      initial[task.category].total += 1;
+      if ((task.status ?? "").toLowerCase() === "done") {
+        initial[task.category].done += 1;
       }
     }
 
@@ -221,8 +369,34 @@ export default function HomeScreen() {
   }, [tasks]);
 
   const completionPercent = overallStats.total > 0 ? Math.round((overallStats.done / overallStats.total) * 100) : 0;
-  const docsCount = categoryStats.Docs.total;
-  const upcomingCount = overallStats.remaining;
+
+  const reminderTotal = reminders.length;
+  const reminderUpcoming = useMemo(() => {
+    if (!supportsReminderDueAt) return 0;
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    return reminders.filter((item) => {
+      const due = parseDate(item.due_at);
+      return due ? due >= todayStart : false;
+    }).length;
+  }, [reminders, supportsReminderDueAt]);
+
+  const reminderPinned = useMemo(() => {
+    if (!supportsReminderPinned) return null;
+    return reminders.filter((item) => Boolean(item.pinned)).length;
+  }, [reminders, supportsReminderPinned]);
+
+  const recentVaultCount = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 7);
+
+    return vaultDocs.filter((doc) => {
+      const created = parseDate(doc.created_at);
+      return created ? created >= cutoff : false;
+    }).length;
+  }, [vaultDocs]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: tokens.bg }]} edges={["top"]}>
@@ -233,8 +407,20 @@ export default function HomeScreen() {
             <Text style={[styles.welcome, { color: tokens.mutedText }]}>Welcome back</Text>
           </View>
           <Pressable
-            onPress={() => console.log("TODO: refresh")}
-            style={[styles.refreshBtn, { backgroundColor: tokens.card, borderColor: tokens.border, shadowColor: tokens.shadow }]}
+            onPress={() => {
+              setRefreshing(true);
+              void loadDashboard();
+            }}
+            style={[
+              styles.refreshBtn,
+              {
+                backgroundColor: tokens.card,
+                borderColor: tokens.border,
+                shadowColor: tokens.shadow,
+                opacity: refreshing ? 0.7 : 1,
+              },
+            ]}
+            disabled={refreshing}
           >
             <Ionicons name="refresh" size={18} color={tokens.primaryBlue} />
           </Pressable>
@@ -247,8 +433,8 @@ export default function HomeScreen() {
           style={[styles.statusCard, { shadowColor: tokens.shadow }]}
         >
           <View style={styles.statusLeft}>
-            <Text style={styles.statusHeader}>Your status</Text>
-            <Text style={styles.statusMain}>You&apos;re on track</Text>
+            <Text style={styles.statusHeader}>Dashboard status</Text>
+            <Text style={styles.statusMain}>{loading ? "Syncing data" : "You&apos;re on track"}</Text>
             <Pressable onPress={() => router.push("/(tabs)/tasks")} style={styles.statusButton}>
               <Text style={styles.statusButtonText}>View Tasks</Text>
             </Pressable>
@@ -271,28 +457,44 @@ export default function HomeScreen() {
         <Text style={[styles.sectionTitle, { color: tokens.text }]}>In Progress</Text>
         <View style={styles.progressGrid}>
           <Pressable style={styles.progressTilePress} onPress={() => router.push("/(tabs)/vault")}>
-            <Card style={[styles.progressTile, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
-              <View style={[styles.tileIconWrap, { backgroundColor: tokens.categoryColors.Docs.bg }]}>
+            <Card style={[styles.progressTile, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
+              <View style={[styles.tileIconWrap, { backgroundColor: tokens.categoryColors.Docs.bg }]}> 
                 <Ionicons name="folder-open-outline" size={18} color={tokens.categoryColors.Docs.fg} />
               </View>
               <Text style={[styles.tileTitle, { color: tokens.text }]}>Docs Vault</Text>
-              <Text style={[styles.tileSub, { color: tokens.mutedText }]}>{docsCount} files</Text>
+              <Text style={[styles.tileSub, { color: tokens.mutedText }]}> 
+                {vaultAvailable ? `${vaultDocs.length} files • ${recentVaultCount} recent` : "Vault not configured"}
+              </Text>
             </Card>
           </Pressable>
 
           <Pressable style={styles.progressTilePress} onPress={() => router.push("/(tabs)/reminders")}>
-            <Card style={[styles.progressTile, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
-              <View style={[styles.tileIconWrap, { backgroundColor: tokens.categoryColors.Immigration.bg }]}>
+            <Card style={[styles.progressTile, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
+              <View style={[styles.tileIconWrap, { backgroundColor: tokens.categoryColors.Immigration.bg }]}> 
                 <Ionicons name="notifications-outline" size={18} color={tokens.categoryColors.Immigration.fg} />
               </View>
               <Text style={[styles.tileTitle, { color: tokens.text }]}>Reminders</Text>
-              <Text style={[styles.tileSub, { color: tokens.mutedText }]}>{upcomingCount} upcoming</Text>
+              <Text style={[styles.tileSub, { color: tokens.mutedText }]}> 
+                {supportsReminderDueAt
+                  ? `${reminderUpcoming} upcoming • ${reminderTotal} total`
+                  : `${reminderTotal} total reminders`}
+              </Text>
             </Card>
           </Pressable>
         </View>
 
+        <Card style={[styles.aiRiskCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
+          <View style={[styles.aiIconWrap, { backgroundColor: tokens.categoryColors.General.bg }]}> 
+            <Ionicons name="sparkles-outline" size={18} color={tokens.categoryColors.General.fg} />
+          </View>
+          <View style={styles.aiTextWrap}>
+            <Text style={[styles.aiTitle, { color: tokens.text }]}>AI Risk</Text>
+            <Text style={[styles.aiSub, { color: tokens.mutedText }]}>Model insights are being connected. Live score will appear here soon.</Text>
+          </View>
+        </Card>
+
         <Text style={[styles.sectionTitle, { color: tokens.text }]}>Task Groups</Text>
-        <Card style={[styles.groupListCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
+        <Card style={[styles.groupListCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
           {GROUPS.map((group, index) => {
             const stats = categoryStats[group.label];
             const percent = stats.total > 0 ? Math.round((stats.done / stats.total) * 100) : 0;
@@ -309,41 +511,80 @@ export default function HomeScreen() {
                 }
                 style={[
                   styles.groupRow,
-                  index < GROUPS.length - 1 && { borderBottomColor: tokens.border, borderBottomWidth: StyleSheet.hairlineWidth },
+                  index < GROUPS.length - 1 && {
+                    borderBottomColor: tokens.border,
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                  },
                 ]}
               >
                 <View style={styles.groupLeft}>
-                  <View style={[styles.groupIconTile, { backgroundColor: accent.bg }]}>
+                  <View style={[styles.groupIconTile, { backgroundColor: accent.bg }]}> 
                     <Ionicons name={group.icon} size={18} color={accent.fg} />
                   </View>
                   <View>
                     <Text style={[styles.groupLabel, { color: tokens.text }]}>{group.label}</Text>
-                    <Text style={[styles.groupSub, { color: tokens.mutedText }]}>{stats.total} tasks</Text>
+                    <Text style={[styles.groupSub, { color: tokens.mutedText }]}> 
+                      {tasksCategoryAvailable ? `${stats.total} tasks` : "Category data unavailable"}
+                    </Text>
                   </View>
                 </View>
-                <CategoryRing
-                  percent={percent}
-                  size={40}
-                  strokeWidth={5}
-                  color={accent.fg}
-                  trackColor={accent.bg}
-                  textColor={accent.fg}
-                />
+                <CategoryRing percent={percent} size={40} strokeWidth={5} color={accent.fg} trackColor={accent.bg} textColor={accent.fg} />
               </Pressable>
             );
           })}
         </Card>
+
+        <Card style={[styles.summaryCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}> 
+          <Text style={[styles.summaryTitle, { color: tokens.text }]}>Profile Completion</Text>
+          <Text style={[styles.summaryValue, { color: tokens.primaryBlue }]}>{profileCompletion}%</Text>
+          <Text style={[styles.summarySub, { color: tokens.mutedText }]}> 
+            {supportsReminderPinned && reminderPinned !== null
+              ? `${overallStats.total} tasks • ${reminderPinned} pinned reminders`
+              : `${overallStats.total} tasks • ${reminderTotal} reminders`}
+          </Text>
+        </Card>
+
+        {errorText ? <Text style={[styles.errorText, { color: tokens.danger }]}>{errorText}</Text> : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  aiIconWrap: {
+    alignItems: "center",
+    borderRadius: 10,
+    height: 34,
+    justifyContent: "center",
+    width: 34,
+  },
+  aiRiskCard: {
+    alignItems: "center",
+    borderRadius: 20,
+    flexDirection: "row",
+    gap: 12,
+    minHeight: 84,
+  },
+  aiSub: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  aiTextWrap: {
+    flex: 1,
+  },
+  aiTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
   container: {
     gap: 14,
     paddingBottom: 120,
     paddingHorizontal: 18,
     paddingTop: 10,
+  },
+  errorText: {
+    fontSize: 13,
+    textAlign: "center",
   },
   groupIconTile: {
     alignItems: "center",
@@ -476,6 +717,25 @@ const styles = StyleSheet.create({
   },
   statusRight: {
     justifyContent: "center",
+  },
+  summaryCard: {
+    alignItems: "center",
+    borderRadius: 20,
+    gap: 2,
+    minHeight: 98,
+    justifyContent: "center",
+  },
+  summarySub: {
+    fontSize: 13,
+  },
+  summaryTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  summaryValue: {
+    fontSize: 30,
+    fontWeight: "900",
+    lineHeight: 34,
   },
   tileIconWrap: {
     alignItems: "center",

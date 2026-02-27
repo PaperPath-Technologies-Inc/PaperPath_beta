@@ -385,7 +385,13 @@ export default function RemindersScreen() {
                               ) : (
                                 <View />
                               )}
-                              <Pressable onPress={() => void togglePinned(row)} hitSlop={10}>
+                              <Pressable
+                                onPress={(event) => {
+                                  event.stopPropagation();
+                                  void togglePinned(row);
+                                }}
+                                hitSlop={10}
+                              >
                                 <Ionicons name="pin" size={15} color={tokens.primaryBlue} />
                               </Pressable>
                             </View>
