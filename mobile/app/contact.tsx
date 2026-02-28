@@ -13,11 +13,11 @@ export default function ContactScreen() {
       <View style={styles.container}>
         <Text style={[styles.title, { color: tokens.text }]}>Contact</Text>
 
-        <Pressable onPress={() => void Linking.openURL("mailto:support@paperpath.ca")}> 
+        <Pressable onPress={() => void Linking.openURL("mailto:admin@paperpath.ca")}> 
           <Card style={[styles.rowCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>
             <View style={styles.row}>
               <Ionicons name="mail-outline" size={18} color={tokens.primaryBlue} />
-              <Text style={[styles.rowText, { color: tokens.text }]}>support@paperpath.ca</Text>
+              <Text style={[styles.rowText, { color: tokens.text }]}>admin@path.ca</Text>
               <Ionicons name="open-outline" size={16} color={tokens.mutedText} />
             </View>
           </Card>

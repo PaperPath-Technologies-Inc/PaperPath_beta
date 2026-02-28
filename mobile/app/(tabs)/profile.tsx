@@ -34,6 +34,19 @@ function normalizeDate(value: string | null | undefined) {
   return value?.trim() ?? "";
 }
 
+function isMissingColumnError(error: unknown, column: string) {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message?: string }).message ?? "").toLowerCase()
+      : "";
+
+  return (
+    message.includes(`'${column.toLowerCase()}'`) ||
+    message.includes(`\"${column.toLowerCase()}\"`) ||
+    message.includes(`column ${column.toLowerCase()}`)
+  );
+}
+
 function toTitleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 }
@@ -225,11 +238,26 @@ export default function ProfileScreen() {
 
     try {
       const fullTry = await supabase.from("profiles").upsert(fullPayload, { onConflict: "id" });
+      let fullNameColumnMissing = false;
 
       if (fullTry.error) {
+        fullNameColumnMissing = isMissingColumnError(fullTry.error, "full_name");
         const coreTry = await supabase.from("profiles").upsert(corePayload, { onConflict: "id" });
         if (coreTry.error) {
           throw coreTry.error;
+        }
+      }
+
+      if (fullNameColumnMissing && user) {
+        const trimmedName = fullName.trim();
+        const { error } = await supabase.auth.updateUser({
+          data: {
+            full_name: trimmedName || null,
+            name: trimmedName || null,
+          },
+        });
+        if (error) {
+          console.warn("Profile metadata update failed", error);
         }
       }
 

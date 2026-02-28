@@ -392,7 +392,7 @@ export default function TasksScreen() {
                 <Text style={styles.progressEyebrow}>Path Progress</Text>
                 <Text style={styles.progressDue}>{pathDueLabel}</Text>
                 <Text style={styles.progressPercent}>{progress.percent}%</Text>
-                <Text style={styles.progressTrack}>You&apos;re on track</Text>
+                <Text style={styles.progressTrack}>You're on track</Text>
               </View>
               <View style={styles.progressRing}>
                 <View style={styles.ringContainer}>

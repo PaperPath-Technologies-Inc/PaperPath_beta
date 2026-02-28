@@ -57,7 +57,7 @@ export default function SupportScreen() {
 
         <Pressable
           onPress={() => {
-            void Linking.openURL("mailto:support@paperpath.ca?subject=PaperPath%20Support");
+            void Linking.openURL("mailto:admin@paperpath.ca?subject=PaperPath%20Support");
           }}
         >
           <Card style={[styles.actionCard, { borderColor: tokens.border, borderWidth: 1, shadowColor: tokens.shadow }]}>

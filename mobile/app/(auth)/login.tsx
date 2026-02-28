@@ -103,7 +103,7 @@ export default function LoginScreen() {
                 <Text style={[styles.metaText, { color: tokens.text }]}>Remember Me</Text>
               </Pressable>
 
-              <Pressable onPress={() => Alert.alert("Password reset", "Please contact support@paperpath.ca to reset your password.")}>
+              <Pressable onPress={() => Alert.alert("Password reset", "Please contact admin@paperpath.ca to reset your password.")}>
                 <Text style={[styles.forgot, { color: tokens.primaryBlue }]}>Forgot Password?</Text>
               </Pressable>
             </View>

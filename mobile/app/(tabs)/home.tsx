@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -21,6 +21,15 @@ type ProfileRow = {
   expiry_date?: string | null;
   study_permit_expiry_date?: string | null;
   program_end_date?: string | null;
+};
+
+type ProfileFieldSupport = {
+  city: boolean;
+  expiry_date: boolean;
+  full_name: boolean;
+  program_end_date: boolean;
+  status: boolean;
+  study_permit_expiry_date: boolean;
 };
 
 type TaskRow = {
@@ -142,6 +151,14 @@ export default function HomeScreen() {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const [profile, setProfile] = useState<ProfileRow | null>(null);
+  const [profileFieldSupport, setProfileFieldSupport] = useState<ProfileFieldSupport>({
+    city: true,
+    expiry_date: true,
+    full_name: true,
+    program_end_date: true,
+    status: true,
+    study_permit_expiry_date: true,
+  });
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [reminders, setReminders] = useState<ReminderRow[]>([]);
   const [vaultDocs, setVaultDocs] = useState<VaultRow[]>([]);
@@ -153,14 +170,66 @@ export default function HomeScreen() {
   const [tasksCategoryAvailable, setTasksCategoryAvailable] = useState(true);
 
   const fetchProfile = useCallback(async (uid: string) => {
-    const candidates = [
-      "full_name, city, status, expiry_date, study_permit_expiry_date, program_end_date",
-      "full_name, city, status, expiry_date",
-      "full_name",
+    const candidates: { select: string; support: ProfileFieldSupport }[] = [
+      {
+        select: "full_name, city, status, expiry_date, study_permit_expiry_date, program_end_date",
+        support: {
+          city: true,
+          expiry_date: true,
+          full_name: true,
+          program_end_date: true,
+          status: true,
+          study_permit_expiry_date: true,
+        },
+      },
+      {
+        select: "city, status, expiry_date, study_permit_expiry_date, program_end_date",
+        support: {
+          city: true,
+          expiry_date: true,
+          full_name: false,
+          program_end_date: true,
+          status: true,
+          study_permit_expiry_date: true,
+        },
+      },
+      {
+        select: "city, status, expiry_date",
+        support: {
+          city: true,
+          expiry_date: true,
+          full_name: false,
+          program_end_date: false,
+          status: true,
+          study_permit_expiry_date: false,
+        },
+      },
+      {
+        select: "status, expiry_date",
+        support: {
+          city: false,
+          expiry_date: true,
+          full_name: false,
+          program_end_date: false,
+          status: true,
+          study_permit_expiry_date: false,
+        },
+      },
+      {
+        select: "id",
+        support: {
+          city: false,
+          expiry_date: false,
+          full_name: false,
+          program_end_date: false,
+          status: false,
+          study_permit_expiry_date: false,
+        },
+      },
     ];
 
-    for (const select of candidates) {
-      const response = await supabase.from("profiles").select(select).eq("id", uid).maybeSingle();
+    for (const candidate of candidates) {
+      const response = await supabase.from("profiles").select(candidate.select).eq("id", uid).maybeSingle();
       if (response.error) {
         const missingColumn =
           isMissingColumnError(response.error, "full_name") ||
@@ -176,9 +245,18 @@ export default function HomeScreen() {
         throw response.error;
       }
 
+      setProfileFieldSupport(candidate.support);
       return (response.data as ProfileRow | null) ?? null;
     }
 
+    setProfileFieldSupport({
+      city: false,
+      expiry_date: false,
+      full_name: false,
+      program_end_date: false,
+      status: false,
+      study_permit_expiry_date: false,
+    });
     return null;
   }, []);
 
@@ -263,6 +341,14 @@ export default function HomeScreen() {
   const loadDashboard = useCallback(async () => {
     if (!userId || !isSupabaseConfigured) {
       setProfile(null);
+      setProfileFieldSupport({
+        city: false,
+        expiry_date: false,
+        full_name: false,
+        program_end_date: false,
+        status: false,
+        study_permit_expiry_date: false,
+      });
       setTasks([]);
       setReminders([]);
       setVaultDocs([]);
@@ -300,21 +386,29 @@ export default function HomeScreen() {
     }, [loadDashboard])
   );
 
-  const greetingName = profile?.full_name?.trim().split(/\s+/)[0] || emailFallback;
+  const metadataNameRaw =
+    typeof session?.user.user_metadata?.full_name === "string"
+      ? session.user.user_metadata.full_name
+      : typeof session?.user.user_metadata?.name === "string"
+        ? session.user.user_metadata.name
+        : "";
+  const metadataName = metadataNameRaw.trim();
+  const profileName = profileFieldSupport.full_name ? profile?.full_name?.trim() ?? "" : "";
+  const greetingName = (profileName || metadataName || emailFallback).split(/\s+/)[0] ?? "";
   const greeting = greetingName ? `Hi, ${greetingName}` : "Hi there";
 
   const profileCompletion = useMemo(() => {
-    const values = [
-      profile?.full_name,
-      profile?.city,
-      profile?.status,
-      profile?.expiry_date,
-      profile?.study_permit_expiry_date,
-      profile?.program_end_date,
-    ];
+    const values: (string | null | undefined)[] = [];
+    if (profileFieldSupport.full_name) values.push(profile?.full_name);
+    if (profileFieldSupport.city) values.push(profile?.city);
+    if (profileFieldSupport.status) values.push(profile?.status);
+    if (profileFieldSupport.expiry_date) values.push(profile?.expiry_date);
+    if (profileFieldSupport.study_permit_expiry_date) values.push(profile?.study_permit_expiry_date);
+    if (profileFieldSupport.program_end_date) values.push(profile?.program_end_date);
+    if (values.length === 0) return 0;
     const filled = values.filter((value) => Boolean(value && String(value).trim())).length;
     return Math.round((filled / values.length) * 100);
-  }, [profile]);
+  }, [profile, profileFieldSupport]);
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -434,7 +528,7 @@ export default function HomeScreen() {
         >
           <View style={styles.statusLeft}>
             <Text style={styles.statusHeader}>Dashboard status</Text>
-            <Text style={styles.statusMain}>{loading ? "Syncing data" : "You&apos;re on track"}</Text>
+            <Text style={styles.statusMain}>{loading ? "Syncing data" : "You're on track"}</Text>
             <Pressable onPress={() => router.push("/(tabs)/tasks")} style={styles.statusButton}>
               <Text style={styles.statusButtonText}>View Tasks</Text>
             </Pressable>
